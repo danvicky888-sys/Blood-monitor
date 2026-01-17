@@ -1,0 +1,186 @@
+// --- 新增 TIR 與 區間邏輯後的組件 ---
+
+// 1. 新增 RangeSelector 組件
+const RangeSelector = ({ value, onChange }) => (
+  <div className="flex bg-slate-200 p-1 rounded-xl gap-1">
+    {[7, 14, 30, 'all'].map((r) => (
+      <button
+        key={r}
+        onClick={() => onChange(r)}
+        className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+          value === r ? 'bg-white text-teal-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+        }`}
+      >
+        {r === 'all' ? '全部' : `${r}天`}
+      </button>
+    ))}
+  </div>
+);
+
+// 2. 優化後的 SimpleChart (支援漸層與動態區間)
+const EnhancedChart = ({ data, days }) => {
+  if (!data || data.length < 2) return <div className="h-40 flex items-center justify-center text-slate-400 bg-slate-50 rounded-xl border border-dashed">區間內資料不足</div>;
+
+  const vals = data.map(d => d.value);
+  const min = Math.min(...vals, THRESHOLD_LOW) - 20;
+  const max = Math.max(...vals, THRESHOLD_HIGH) + 20;
+  
+  const getX = (i) => (i / (data.length - 1)) * 100;
+  const getY = (v) => 100 - ((v - min) / (max - min)) * 100;
+
+  const points = data.map((d, i) => `${getX(i)},${getY(d.value)}`).join(' ');
+  const areaPoints = `${points} 100,100 0,100`;
+
+  return (
+    <div className="w-full h-48 relative mt-2 bg-white rounded-lg p-2">
+      <svg className="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="lineGradient" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#0d9488" stopOpacity="0.2" />
+            <stop offset="100%" stopColor="#0d9488" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        
+        {/* 背景目標區間 (80-130) */}
+        <rect x="0" y={getY(130)} width="100" height={getY(80) - getY(130)} fill="#f0fdf4" />
+        <line x1="0" y1={getY(130)} x2="100" y2={getY(130)} stroke="#bbf7d0" strokeWidth="0.5" strokeDasharray="1" />
+        <line x1="0" y1={getY(80)} x2="100" y2={getY(80)} stroke="#bbf7d0" strokeWidth="0.5" strokeDasharray="1" />
+
+        {/* 趨勢填滿區域 */}
+        <polyline points={areaPoints} fill="url(#lineGradient)" />
+        
+        {/* 趨勢線 */}
+        <polyline points={points} fill="none" stroke="#0d9488" strokeWidth="2" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+
+        {/* 數據點 */}
+        {data.map((d, i) => (
+          <circle 
+            key={i} cx={getX(i)} cy={getY(d.value)} r="1.5" 
+            fill={d.value > THRESHOLD_HIGH || d.value < THRESHOLD_LOW ? '#ef4444' : '#0d9488'} 
+            stroke="white" strokeWidth="0.5" vectorEffect="non-scaling-stroke" 
+          />
+        ))}
+      </svg>
+      <div className="flex justify-between text-[10px] text-slate-400 mt-2 px-1 font-mono">
+        <span>{data[0].date}</span>
+        <span>{data[data.length-1].date}</span>
+      </div>
+    </div>
+  );
+};
+
+// --- 在 App 組件內的邏輯修改 ---
+
+export default function App() {
+  // ... 其他 state
+  const [displayRange, setDisplayRange] = useState(14); // 預設 14 天
+
+  // 3. 數據分析邏輯強化 (TIR + 區間過濾)
+  const { filteredGLogs, tirData, stats } = useMemo(() => {
+    // 區間過濾
+    let logs = [...gLogs].sort((a, b) => new Date(a.date) - new Date(b.date));
+    if (displayRange !== 'all') {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - displayRange);
+      logs = logs.filter(l => new Date(l.date) >= cutoff);
+    }
+
+    if (logs.length === 0) return { filteredGLogs: [], tirData: null, stats: {} };
+
+    // TIR 計算 (目標 80 - 130)
+    const total = logs.length;
+    const inRange = logs.filter(l => l.value >= 80 && l.value <= 130).length;
+    const high = logs.filter(l => l.value > 130).length;
+    const low = logs.filter(l => l.value < 80).length;
+
+    const tir = Math.round((inRange / total) * 100);
+    const tar = Math.round((high / total) * 100); // Time Above Range
+    const tbr = Math.round((low / total) * 100);  // Time Below Range
+
+    const avg = Math.round(logs.reduce((a, b) => a + Number(b.value), 0) / total);
+
+    return {
+      filteredGLogs: logs,
+      tirData: { tir, tar, tbr },
+      stats: { avg, count: total }
+    };
+  }, [gLogs, displayRange]);
+
+  // ... (其餘渲染邏輯)
+
+  return (
+    <div className="min-h-screen bg-slate-50 pb-20">
+      {/* ... Header ... */}
+      
+      <main className="max-w-md mx-auto p-4 space-y-4">
+        {tab === 'dashboard' && (
+          <>
+            {/* 區間選擇器 */}
+            <RangeSelector value={displayRange} onChange={setDisplayRange} />
+
+            {/* 精進後的 KPI 卡片 */}
+            <div className="grid grid-cols-2 gap-3">
+              <Card className="bg-white p-4 border-none shadow-sm ring-1 ring-slate-100">
+                <div className="flex justify-between items-start">
+                  <div className="text-xs text-slate-500 font-bold uppercase tracking-wider">平均血糖</div>
+                  <TrendingUp size={14} className="text-teal-500" />
+                </div>
+                <div className="text-3xl font-black text-slate-800 mt-1">{stats.avg || '--'}</div>
+                <div className="text-[10px] text-slate-400 mt-1">mg/dL ({stats.count} 筆記錄)</div>
+              </Card>
+
+              {/* TIR 視覺化卡片 */}
+              <Card className="bg-white p-4 border-none shadow-sm ring-1 ring-slate-100 overflow-hidden relative">
+                <div className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-1">TIR (達標率)</div>
+                <div className="flex items-baseline gap-1">
+                  <div className={`text-3xl font-black ${tirData?.tir > 70 ? 'text-green-600' : 'text-orange-500'}`}>
+                    {tirData?.tir ?? '--'}<span className="text-sm">%</span>
+                  </div>
+                </div>
+                {/* TIR 分條圖 */}
+                <div className="flex h-1.5 w-full bg-slate-100 rounded-full mt-3 overflow-hidden">
+                   <div style={{ width: `${tirData?.tar}%` }} className="bg-orange-400" />
+                   <div style={{ width: `${tirData?.tir}%` }} className="bg-green-500" />
+                   <div style={{ width: `${tirData?.tbr}%` }} className="bg-red-500" />
+                </div>
+                <div className="flex justify-between text-[8px] mt-1 font-bold">
+                  <span className="text-orange-500">高 {tirData?.tar}%</span>
+                  <span className="text-green-600">標 {tirData?.tir}%</span>
+                  <span className="text-red-500">低 {tirData?.tbr}%</span>
+                </div>
+              </Card>
+            </div>
+
+            {/* 動態趨勢圖 */}
+            <Card title={`📊 血糖趨勢 (${displayRange === 'all' ? '全部' : `近 ${displayRange} 天`})`}>
+              <EnhancedChart data={filteredGLogs} days={displayRange} />
+            </Card>
+
+            {/* TIR 解讀建議 */}
+            {tirData && (
+              <div className={`p-4 rounded-xl border flex gap-3 items-center ${
+                tirData.tir >= 70 ? 'bg-green-50 border-green-100' : 'bg-amber-50 border-amber-100'
+              }`}>
+                <div className={`p-2 rounded-full ${tirData.tir >= 70 ? 'bg-green-100 text-green-600' : 'bg-amber-100 text-amber-600'}`}>
+                  <Shield size={20} />
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-slate-800">
+                    {tirData.tir >= 70 ? '優異的控制狀態！' : '仍有進步空間'}
+                  </div>
+                  <div className="text-xs text-slate-600 leading-tight">
+                    {tirData.tir >= 70 
+                      ? '您的 TIR 達標率超過 70%，能有效降低併發症風險。' 
+                      : `建議減少高血糖 (TAR: ${tirData.tar}%) 的頻率，以提升 TIR 至 70% 以上。`}
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+        
+        {/* ... 其他 Tab 保持不變 ... */}
+      </main>
+    </div>
+  );
+}
