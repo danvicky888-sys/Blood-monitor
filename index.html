@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>血糖監測與任務管理系統</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <style>
+        :root { --primary-color: #e63946; --bg-color: #f8f9fa; }
+        body { font-family: sans-serif; background-color: var(--bg-color); display: flex; justify-content: center; padding: 20px; }
+        .container { background: white; width: 100%; max-width: 700px; padding: 25px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+        
+        /* 圖表區域 */
+        .chart-container { margin: 20px 0; height: 300px; }
+
+        /* 輸入區域 */
+        .input-group { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+        input { padding: 10px; border: 1px solid #ddd; border-radius: 8px; }
+        .input-main { flex: 2; min-width: 150px; }
+        .input-val { flex: 1; min-width: 80px; }
+        button { padding: 10px 20px; background: var(--primary-color); color: white; border: none; border-radius: 8px; cursor: pointer; }
+
+        /* 過濾器 */
+        .filter-group { display: flex; background: #eee; padding: 4px; border-radius: 8px; margin-bottom: 15px; }
+        .filter-btn { flex: 1; border: none; background: none; padding: 8px; cursor: pointer; border-radius: 6px; }
+        .filter-btn.active { background: white; color: var(--primary-color); font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+
+        .list-item { display: flex; justify-content: space-between; padding: 10px; border-bottom: 1px solid #eee; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>🩸 血糖趨勢總覽</h2>
+
+    <div class="input-group">
+        <input type="text" id="record-name" class="input-main" placeholder="紀錄備註 (如：早餐後)">
+        <input type="number" id="blood-sugar" class="input-val" placeholder="血糖值">
+        <input type="time" id="record-time">
+        <button onclick="addData()">新增紀錄</button>
+    </div>
+
+    <div class="filter-group">
+        <button class="filter-btn active" onclick="updateRange('week', this)">週</button>
+        <button class="filter-btn" onclick="updateRange('month', this)">月</button>
+        <button class="filter-btn" onclick="updateRange('quarter', this)">季 (90天)</button>
+        <button class="filter-btn" onclick="updateRange('year', this)">年</button>
+    </div>
+
+    <div class="chart-container">
+        <canvas id="sugarChart"></canvas>
+    </div>
+
+    <div id="data-list"></div>
+</div>
+
+<script>
+    let sugarRecords = JSON.parse(localStorage.getItem('sugarRecords')) || [];
+    let myChart;
+    let currentRange = 'week';
+
+    // 初始化圖表
+    const ctx = document.getElementById('sugarChart').getContext('2d');
+    myChart = new Chart(ctx, {
+        type: 'line',
+        data: { datasets: [{
+            label: '血糖值 (mg/dL)',
+            data: [],
+            borderColor: '#e63946',
+            backgroundColor: 'rgba(230, 57, 70, 0.1)',
+            fill: true,
+            tension: 0.3
+        }]},
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: { type: 'time', time: { unit: 'day' }, title: { display: true, text: '日期' } },
+                y: { beginAtZero: false, title: { display: true, text: 'mg/dL' } }
+            }
+        }
+    });
+
+    render();
+
+    function addData() {
+        const val = document.getElementById('blood-sugar').value;
+        const note = document.getElementById('record-name').value;
+        const time = document.getElementById('record-time').value;
+        
+        if (!val) return alert("請輸入血糖值");
+
+        const newRecord = {
+            id: Date.now(),
+            value: parseFloat(val),
+            note: note || "未命名紀錄",
+            time: time,
+            timestamp: new Date().toISOString()
+        };
+
+        sugarRecords.push(newRecord);
+        localStorage.setItem('sugarRecords', JSON.stringify(sugarRecords));
+        render();
+    }
+
+    function updateRange(range, btn) {
+        currentRange = range;
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        render();
+    }
+
+    function render() {
+        const now = new Date();
+        let startDate = new Date();
+
+        if (currentRange === 'week') startDate.setDate(now.getDate() - 7);
+        else if (currentRange === 'month') startDate.setMonth(now.getMonth() - 1);
+        else if (currentRange === 'quarter') startDate.setDate(now.getDate() - 90);
+        else if (currentRange === 'year') startDate.setFullYear(now.getFullYear() - 1);
+
+        // 過濾資料
+        const filtered = sugarRecords
+            .filter(r => new Date(r.timestamp) >= startDate)
+            .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        // 更新圖表
+        myChart.data.datasets[0].data = filtered.map(r => ({
+            x: r.timestamp,
+            y: r.value
+        }));
+        
+        // 根據區間調整 X 軸單位
+        myChart.options.scales.x.time.unit = currentRange === 'week' ? 'day' : (currentRange === 'year' ? 'month' : 'day');
+        myChart.update();
+
+        // 更新下方列表
+        const listDiv = document.getElementById('data-list');
+        listDiv.innerHTML = '<h4>歷史明細</h4>';
+        filtered.slice().reverse().forEach(r => {
+            const dateStr = new Date(r.timestamp).toLocaleDateString();
+            listDiv.innerHTML += `
+                <div class="list-item">
+                    <span>${dateStr} ${r.time} - ${r.note}</span>
+                    <strong>${r.value} mg/dL</strong>
+                </div>
+            `;
+        });
+    }
+</script>
+
+</body>
+</html>
